@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .agentsec/hooks/agentsec-hook.mjs --client claude",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

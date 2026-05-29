@@ -1,0 +1,21 @@
+{
+  "baseUrl": "https://promptshield-cyan.vercel.app",
+  "mode": "observe",
+  "agentId": "local-coding-agent",
+  "agentName": "Local Coding Agent",
+  "failClosedFor": [
+    "production_deploy",
+    "database_migration",
+    "env_secret_access",
+    "customer_data_export"
+  ],
+  "safeCommands": [
+    "ls",
+    "pwd",
+    "grep",
+    "find",
+    "npm test",
+    "npm run lint",
+    "npm run typecheck"
+  ]
+}

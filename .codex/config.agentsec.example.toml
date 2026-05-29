@@ -1,0 +1,8 @@
+[[hooks.PreToolUse]]
+matcher = "^Bash$|^apply_patch$|^mcp__.*"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'node "$(git rev-parse --show-toplevel)/.agentsec/hooks/agentsec-hook.mjs" --client codex'
+timeout = 15
+statusMessage = "Checking AgentSec policy"
