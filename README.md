@@ -2,183 +2,106 @@
 
 # AgentSec Hook Pack
 
-**Runtime security and policy enforcement hooks for AI coding agents**
-
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-Hook_Pack-D4A82A?logo=anthropic&logoColor=white)](https://claude.ai/code)
-[![OpenAI Codex](https://img.shields.io/badge/Codex-Compatible-412991?logo=openai&logoColor=white)](https://openai.com)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+**Pre-tool-use policy hook prototype for AI coding agents**
 
 </div>
 
----
+## Scope
 
-## What It Does
+AgentSec Hook Pack is a dependency-free Node.js hook that reads a tool-use event from standard input and returns a client-specific allow, deny, or approval decision.
 
-AgentSec Hook Pack intercepts and classifies risky tool calls **before** an AI agent executes them — blocking destructive shell commands, secret exfiltration, unauthorized file edits, and unreviewed production deployments in real time.
+It provides:
 
-Drop the hook into any project. Zero configuration for common workflows. Safe read-only commands (`ls`, `grep`, `npm test`) pass through instantly; dangerous ones get classified and held for human approval.
+- local allow rules for explicitly configured read-only commands
+- local blocking rules for obvious destructive shell patterns
+- read-only MCP tool fast paths
+- optional remote policy inspection through an AgentSec-compatible HTTP endpoint
+- `observe`, `prompt`, and `enforce` modes
+- Claude-style JSON decisions and exit-code based client behavior
 
----
+The default configuration uses `observe` mode. In that mode risky actions are allowed after inspection; use `prompt` or `enforce` when the hook must interrupt execution.
 
-## How It Works
+## Verified behavior
 
-```mermaid
-sequenceDiagram
-    participant Agent as AI Agent<br/>(Claude / Codex)
-    participant Hook as agentsec-hook.mjs
-    participant API as AgentSec API
-    participant Human as Human Reviewer
+GitHub Actions runs the hook on Node.js 20 and verifies:
 
-    Agent->>Hook: PreToolUse event (Bash / Edit / MCP write)
-    Hook->>Hook: Local safe-command fast-path
-    alt Safe command (ls, grep, npm test...)
-        Hook-->>Agent: ✅ allow (no network call)
-    else Risky command
-        Hook->>API: POST tool payload + agentId
-        API->>API: Classify risk (policy engine)
-        alt Allowed by policy
-            API-->>Hook: decision: allow
-            Hook-->>Agent: ✅ allow
-        else Requires human approval
-            API-->>Hook: decision: requires_approval
-            Hook-->>Agent: ⏸ ask (approval URL)
-            Human->>API: Approve / Reject
-            Agent->>Hook: Retry after approval
-        else Denied by policy
-            API-->>Hook: decision: deny
-            Hook-->>Agent: 🚫 deny
-        end
-    end
-```
+- JavaScript syntax
+- configuration JSON validity
+- safe read-only command allowance
+- destructive command denial in enforce mode
+- rejection of chained-command prefix bypasses such as `ls; rm -rf /`
+- rejection of mutating `find -exec` commands through the safe path
+- prompt-mode fallback when no API key is available
+- fail-closed handling of malformed hook input
 
----
+## Installation
 
-## Supported Agents
-
-| Agent | Integration File | Matcher |
-|---|---|---|
-| **Claude Code** | `.claude/settings.json` | `Bash\|Edit\|Write\|mcp__.*` |
-| **OpenAI Codex** | `.codex/config.toml` | `^Bash$\|^apply_patch$\|^mcp__.*` |
-
----
-
-## Quick Start
-
-### 1. Copy the hook into your project
+Copy `.agentsec` into the repository that should use the hook:
 
 ```bash
-# From the root of the repo you want to protect
 cp -r /path/to/agentsec-hook-pack/.agentsec .
 ```
 
-### 2. Set your API key
+Set the remote policy key when remote inspection is required:
 
 ```bash
 export AGENTSEC_API_KEY="your_api_key_here"
 ```
 
-### 3. Wire the hook into your agent
+Run the hook directly:
 
-**Claude Code** — add to `.claude/settings.json`:
+```bash
+echo '{"toolName":"Bash","input":{"command":"npm test"}}' \
+  | node .agentsec/hooks/agentsec-hook.mjs --client claude
+```
+
+Claude-style allow response:
 
 ```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash|Edit|Write|mcp__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node .agentsec/hooks/agentsec-hook.mjs --client claude",
-            "timeout": 15
-          }
-        ]
-      }
-    ]
-  }
-}
+{"permissionDecision":"allow"}
 ```
-
-**Codex** — add to `.codex/config.toml`:
-
-```toml
-[[hooks.PreToolUse]]
-matcher = "^Bash$|^apply_patch$|^mcp__.*"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = 'node "$(git rev-parse --show-toplevel)/.agentsec/hooks/agentsec-hook.mjs" --client codex'
-timeout = 15
-statusMessage = "Checking AgentSec policy"
-```
-
----
 
 ## Configuration
 
-Edit `.agentsec/config.json` to tune behavior:
+`.agentsec/config.json`:
 
 ```json
 {
   "baseUrl": "https://promptshield-cyan.vercel.app",
   "mode": "observe",
   "agentId": "local-coding-agent",
-  "failClosedFor": [
-    "production_deploy",
-    "database_migration",
-    "env_secret_access",
-    "customer_data_export"
-  ],
   "safeCommands": ["ls", "pwd", "grep", "find", "npm test", "npm run lint"]
 }
 ```
 
-| Field | Description |
+| Mode | Behavior |
 |---|---|
-| `mode` | `observe` logs without blocking; `enforce` blocks on deny decisions |
-| `failClosedFor` | Risk categories that always require human approval |
-| `safeCommands` | Commands that bypass the API check entirely |
+| `observe` | Performs classification but allows the action |
+| `prompt` | Converts risky or unavailable-policy decisions into an approval request |
+| `enforce` | Denies local blocks, remote denials, and unavailable-policy risky actions |
 
----
+Safe-command entries allow the exact command or arguments following it. Commands containing shell chaining, redirection, command substitution, or mutating `find` actions do not use the safe fast path.
 
-## What Gets Guarded
+## Client examples
 
-```
-Tool call arrives
-        │
-        ├─ Bash commands ──── rm -rf, DROP TABLE, git push --force
-        ├─ File edits ──────── .env writes, production config changes
-        ├─ MCP writes ──────── mcp__*  (delete, write, deploy)
-        └─ Secret access ───── env reads, keychain queries, token exports
-```
+Example configuration snippets are included for Claude-style hooks and an exit-code based Codex-style adapter:
 
----
+- `.claude/settings.agentsec.example.json`
+- `.codex/config.agentsec.example.toml`
 
-## Project Structure
+These files are integration examples. Client hook formats can change and should be checked against the installed client version.
 
-```
-.agentsec/
-  hooks/
-    agentsec-hook.mjs       # Runtime hook — drop into any project
-  config.json               # Policy configuration
-.claude/
-  settings.agentsec.example.json   # Claude Code snippet
-.codex/
-  config.agentsec.example.toml     # Codex snippet
-docs/
-  AGENTSEC_HOOK_PACK.md            # Integration guide
+## Development
+
+```bash
+npm run check
+npm test
 ```
 
----
+## Current limitations
 
-## Tech Stack
-
-<div align="center">
-
-![Node.js](https://skillicons.dev/icons?i=nodejs)&nbsp;
-![JavaScript](https://skillicons.dev/icons?i=js)&nbsp;
-![JSON](https://img.shields.io/badge/JSON-Config-000000?logo=json&logoColor=white)
-
-</div>
+- remote classification depends on the configured HTTP service
+- the local rule set is intentionally small and conservative
+- `observe` mode does not block actions
+- approval persistence and reviewer UI are external to this repository
+- shell classification is not a substitute for OS sandboxing or least-privilege credentials

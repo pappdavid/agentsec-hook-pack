@@ -3,6 +3,18 @@ import path from 'path';
 import https from 'https';
 import http from 'http';
 
+const SHELL_CONTROL_PATTERN = /(?:&&|\|\||[;|`]|>\s*|<\s*|\$\(|\r|\n)/;
+const FIND_MUTATION_PATTERN = /\s-(?:exec|execdir|ok|okdir|delete|fprint|fprintf|fls)\b/i;
+
+function isConfiguredSafeCommand(command, safeCommands) {
+  if (SHELL_CONTROL_PATTERN.test(command)) return false;
+  if (/^find(?:\s|$)/i.test(command) && FIND_MUTATION_PATTERN.test(command)) return false;
+
+  return safeCommands.some((safeCommand) =>
+    command === safeCommand || command.startsWith(`${safeCommand} `)
+  );
+}
+
 // 1. Read JSON hook input from stdin
 async function readStdin() {
   let data = '';
@@ -92,14 +104,12 @@ async function main() {
   let isSafe = false;
   if (toolName === 'Bash' || toolName === 'shell_command' || toolName.toLowerCase() === 'bash') {
     const cmdTrimmed = command.trim();
-    if (safeCommands.some(sc => cmdTrimmed.startsWith(sc))) {
+    if (isConfiguredSafeCommand(cmdTrimmed, safeCommands)) {
       isSafe = true;
     }
     // Simple block list for obvious bad commands
     const blockPatterns = [
-      /^rm\s+-rf\s+\/$/,
-      /^rm\s+-rf\s+~$/,
-      /^rm\s+-rf\s+\.$/,
+      /^(?:sudo\s+)?rm\s+-(?=[a-z]*r)(?=[a-z]*f)[a-z]+\s+(?:--\s+)?(?:\/\*?|~\/?\*?|\.\/?\*?)\s*$/i,
       /curl.*\|.*sh/i,
       /wget.*\|.*sh/i,
       /\.env\s+.*curl/i // Obvious secret exfiltration
